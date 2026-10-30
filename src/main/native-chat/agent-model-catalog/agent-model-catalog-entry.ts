@@ -260,7 +260,15 @@ export function agentModelCatalogEntryWithSuccess(
     at
   }
   const { agent, fingerprint } = identity
-  const configured = previous?.configured ?? null
+  let configured = previous?.configured ?? null
+  if (agent === 'pi' && source === 'discovery') {
+    const { model, effort } = success.configured ?? {}
+    if (model) {
+      const facts = configuredDefaultFacts({ modelId: model, effort }, configured)
+      configured = facts && { ...facts, at }
+    }
+    return agentModelCatalogEntry(agent, fingerprint, listing, null, configured)
+  }
   return source === 'discovery'
     ? agentModelCatalogEntry(agent, fingerprint, listing, previous?.live ?? null, configured)
     : agentModelCatalogEntry(agent, fingerprint, previous?.discovered ?? null, listing, configured)

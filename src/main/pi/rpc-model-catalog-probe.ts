@@ -1,5 +1,6 @@
 import { assertStructuredAgentResolutionCurrent } from '../native-chat/structured-agent-command-resolution'
 import { homedir } from 'node:os'
+import { z } from 'zod'
 import { requireLegacyAgentSessionAccountHome } from '../../shared/agent-session-account-home'
 import type { resolveCliCommand } from '../../shared/node-cli-command-resolution'
 import type { AgentCliVersionReader } from '../agent-cli-version-probe'
@@ -13,9 +14,15 @@ import type { StructuredAgentCommandSettings } from '../native-chat/structured-a
 import type { ProviderProcessLaunch } from '../provider-process/provider-process-launch'
 import { buildPiRpcLaunch, piRpcSessionlessEnvironment } from './rpc-launch'
 import { checkPiRpcVersion, resolvePiRpcInvocation } from './rpc-launch-resolution'
-import { readPiRpcModelOptions, type PiRpcRequester } from './rpc-options'
+import { piModelOptionId, readPiRpcModelOptions, type PiRpcRequester } from './rpc-options'
+import { piRpcModelSchema } from './rpc-protocol'
 
 type PiModelCatalogConnection = PiRpcRequester & { close(): Promise<unknown> }
+
+const discoveryStateSchema = z.object({
+  model: piRpcModelSchema.pick({ provider: true, id: true }).nullish(),
+  thinkingLevel: z.unknown().optional()
+})
 
 export type PiModelCatalogProbeDeps = {
   resolveEnvironment: () => Promise<NodeJS.ProcessEnv>
@@ -72,18 +79,37 @@ export function createPiModelCatalogProbe(deps: PiModelCatalogProbeDeps): AgentM
       ...piRpcSessionlessEnvironment(env),
       fullAccess: true
     })
-    const models = await runAgentModelCatalogSession(
+    const success = await runAgentModelCatalogSession(
       () =>
         (deps.connect ?? connectPiModelCatalog)({
           ...launch,
           args: [...launch.args, '--no-session']
         }),
-      readPiRpcModelOptions,
+      async (connection): Promise<AgentModelCatalogSuccess> => {
+        let configured: AgentModelCatalogSuccess['configured']
+        try {
+          const state = discoveryStateSchema.safeParse(await connection.request('get_state'))
+          if (state.success && state.data.model) {
+            configured = {
+              model: piModelOptionId(state.data.model.provider, state.data.model.id),
+              ...(typeof state.data.thinkingLevel === 'string' && state.data.thinkingLevel
+                ? { effort: state.data.thinkingLevel }
+                : {})
+            }
+          }
+        } catch {
+          // Optional default facts cannot prevent a usable inventory from being discovered.
+        }
+        assertStructuredAgentResolutionCurrent(operation)
+        options?.signal?.throwIfAborted()
+        const models = await readPiRpcModelOptions(connection)
+        return { models, origin: 'probe', ...(configured ? { configured } : {}) }
+      },
       { label: 'pi', signal: options?.signal }
     )
-    if (models.length === 0) {
+    if (success.models.length === 0) {
       throw new Error('pi listed no models')
     }
-    return { models, origin: 'probe' }
+    return success
   }
 }

@@ -80,6 +80,7 @@ describe('Pi model catalog', () => {
     'lists the native menu through sessionless RPC for Command %j',
     async (command) => {
       const launches: ProviderProcessLaunch[] = []
+      const requests: string[] = []
       const close = vi.fn(async () => undefined)
       const probeVersion = vi.fn(async () => ({ version: '0.84.0' }))
       const probe = createPiModelCatalogProbe({
@@ -96,14 +97,18 @@ describe('Pi model catalog', () => {
           launches.push(launch)
           return {
             request: async (command) => {
-              expect(command).toBe('get_available_models')
-              return AVAILABLE_MODELS
+              requests.push(command)
+              return command === 'get_state'
+                ? { model: { provider: 'openai', id: 'gpt-6' }, thinkingLevel: 'xhigh' }
+                : AVAILABLE_MODELS
             },
             close
           }
         }
       })
       const success = await probe({ variable: 'PI_CODING_AGENT_DIR', path: '/homes/pi-a' })
+      expect(requests).toEqual(['get_state', 'get_available_models'])
+      expect(success.configured).toEqual({ model: 'openai/gpt-6', effort: 'xhigh' })
       const levels = (values: string[]) => values.map((value) => ({ value, label: value }))
       expect(success.models).toEqual([
         {
@@ -201,7 +206,7 @@ describe('Pi model catalog', () => {
     )
     expect(structuredAgentSessionMessageSelection(state)).toEqual({})
     await service.demand({ agent: 'pi' })
-    expect(request).toHaveBeenCalledOnce()
+    expect(request).toHaveBeenCalledTimes(2)
     at += AGENT_MODEL_CATALOG_FAILURE_TTL_MS
     expect(store.hasActiveFailure(fingerprint)).toBe(false)
     request.mockResolvedValue(AVAILABLE_MODELS)
@@ -249,17 +254,22 @@ describe('Pi model catalog', () => {
     }
   )
 
-  it('serves a live chat listing under the account key while and after its probe fails', async () => {
+  it('keeps live chat menus local during failed discovery and preserves historical last-good data', async () => {
     const pending = Promise.withResolvers<unknown>()
     const started = Promise.withResolvers<void>()
     let attempts = 0
-    const { store, service, probe, record, fingerprint, close, runListing } = catalog(async () => {
-      if (++attempts === 1) {
-        throw new Error('first RPC failed')
+    const { store, service, probe, record, fingerprint, close, runListing } = catalog(
+      async (command) => {
+        if (command === 'get_state') {
+          return {}
+        }
+        if (++attempts === 1) {
+          throw new Error('first RPC failed')
+        }
+        started.resolve()
+        return pending.promise
       }
-      started.resolve()
-      return pending.promise
-    })
+    )
     await service.demand({ agent: 'pi' })
     expect(await service.read({ agent: 'pi' })).toEqual({ origin: 'unknown' })
     const discovery = store.refresh(fingerprint, 'pi', () => probe(record.accountHome))
@@ -271,20 +281,167 @@ describe('Pi model catalog', () => {
           : { sessionFile: '/s.jsonl', isStreaming: false, isCompacting: false }
     })
     service.recordLiveListing(record.sessionId, { models: live.models })
-    expect(store.get(fingerprint)?.models).toEqual(live.models)
-    expect(await service.read({ agent: 'pi' })).toMatchObject({
-      origin: 'live-session',
-      models: live.models
-    })
+    expect(live.models).toHaveLength(2)
+    expect(store.get(fingerprint)).toBeNull()
+    // Older persisted live data remains last-good until a discovery actually succeeds.
+    const historical = store.recordSuccess(
+      fingerprint,
+      'pi',
+      {
+        models: [live.models[0]!],
+        origin: 'live-session'
+      },
+      'live'
+    )
+    service.recordLiveListing(record.sessionId, { models: live.models })
+    expect(store.get(fingerprint)).toBe(historical)
     pending.reject(new Error('RPC exited'))
     await discovery
     expect(store.failureDetail(fingerprint)).toBe('RPC exited')
     expect(await service.read({ agent: 'pi' })).toMatchObject({
       origin: 'live-session',
-      models: live.models
+      models: historical!.models
     })
     expect(close).toHaveBeenCalledTimes(2)
     expect(runListing).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [
+      'positive',
+      { model: { provider: 'openai', id: 'gpt-6' }, thinkingLevel: 'xhigh' },
+      'openai/gpt-6',
+      'xhigh'
+    ],
+    [
+      'same model missing level',
+      { model: { provider: 'openai', id: 'gpt-6' } },
+      'openai/gpt-6',
+      'high'
+    ],
+    [
+      'invalid unrelated fields and level',
+      { model: { provider: 'openai', id: 'gpt-6', reasoning: 'bad' }, thinkingLevel: 4 },
+      'openai/gpt-6',
+      'high'
+    ],
+    [
+      'empty level',
+      { model: { provider: 'openai', id: 'gpt-6' }, thinkingLevel: '' },
+      'openai/gpt-6',
+      'high'
+    ],
+    [
+      'different model missing level',
+      { model: { provider: 'openai', id: 'gpt-4o-mini' } },
+      'openai/gpt-4o-mini',
+      undefined
+    ],
+    [
+      'unlisted identity',
+      { model: { provider: 'custom', id: 'project-only' }, thinkingLevel: 'max' },
+      'custom/project-only',
+      'max'
+    ],
+    [
+      'unsupported literal level',
+      { model: { provider: 'openai', id: 'gpt-6' }, thinkingLevel: 'future-level' },
+      'openai/gpt-6',
+      'future-level'
+    ],
+    [
+      'nonreasoning level',
+      { model: { provider: 'openai', id: 'gpt-4o-mini' }, thinkingLevel: 'high' },
+      'openai/gpt-4o-mini',
+      'high'
+    ],
+    ['missing model', { thinkingLevel: 'low' }, undefined, undefined],
+    ['null model', { model: null, thinkingLevel: 'low' }, undefined, undefined],
+    ['empty identity', { model: { provider: '', id: 'gpt-6' } }, undefined, undefined],
+    ['invalid provider', { model: { provider: 'open/ai', id: 'gpt-6' } }, undefined, undefined],
+    ['malformed model', { model: 4 }, undefined, undefined],
+    ['malformed payload', null, undefined, undefined],
+    ['rejected state', new Error('state unavailable'), undefined, undefined]
+  ] as const)(
+    'learns only positive discovery defaults: %s',
+    async (_name, state, model, effort) => {
+      const request = vi.fn<PiRpcRequester['request']>(async (command) => {
+        if (command === 'get_available_models') {
+          return AVAILABLE_MODELS
+        }
+        if (state instanceof Error) {
+          throw state
+        }
+        return state
+      })
+      const { store, probe, record, fingerprint, close } = catalog(request, () => 200)
+      store.recordSuccess(
+        fingerprint,
+        'pi',
+        {
+          models: [{ id: 'openai/gpt-6', label: 'old', isDefault: false, efforts: [] }],
+          configured: { model: 'openai/gpt-6', effort: 'high' },
+          origin: 'probe'
+        },
+        'discovery'
+      )
+      const previous = store.get(fingerprint)!.configured
+      const success = await store.refresh(fingerprint, 'pi', () => probe(record.accountHome))
+      expect(success?.configured).toEqual(
+        model ? { modelId: model, ...(effort ? { effort } : {}), at: 200 } : previous
+      )
+      if (!model) {
+        expect(success?.configured).toBe(previous)
+      }
+      expect(success?.models.map((row) => row.id)).toEqual(['openai/gpt-6', 'openai/gpt-4o-mini'])
+      expect(success?.models.filter((row) => row.isDefault).map((row) => row.id)).toEqual(
+        model === 'custom/project-only' ? [] : [model ?? 'openai/gpt-6']
+      )
+      expect(success?.models[1]!.efforts).toEqual([])
+      if (effort === 'future-level' || model === 'openai/gpt-4o-mini') {
+        expect(success?.models.find((row) => row.id === model)).not.toHaveProperty('defaultEffort')
+      }
+      expect(request.mock.calls.map(([command]) => command)).toEqual([
+        'get_state',
+        'get_available_models'
+      ])
+      expect(close).toHaveBeenCalledOnce()
+    }
+  )
+
+  it.each(['abort', 'retirement'] as const)(
+    'does not continue optional state acquisition after %s',
+    async (ending) => {
+      const stop = new AbortController()
+      let current = true
+      const request = vi.fn<PiRpcRequester['request']>(async () => {
+        if (ending === 'abort') {
+          stop.abort()
+        }
+        current = false
+        throw new Error('state ended')
+      })
+      const { probe, record, close } = catalog(request)
+      await expect(
+        probe(record.accountHome, {
+          signal: stop.signal,
+          operation: { signal: stop.signal, current: () => current }
+        })
+      ).rejects.toThrow()
+      expect(request.mock.calls.map(([command]) => command)).toEqual(['get_state'])
+      expect(close).toHaveBeenCalledOnce()
+    }
+  )
+
+  it('publishes no partial defaults when inventory is malformed', async () => {
+    const { store, probe, record, fingerprint } = catalog(async (command) =>
+      command === 'get_state'
+        ? { model: { provider: 'custom', id: 'unlisted' }, thinkingLevel: 'high' }
+        : { models: 'invalid' }
+    )
+    expect(await store.refresh(fingerprint, 'pi', () => probe(record.accountHome))).toBeNull()
+    expect(store.get(fingerprint)).toBeNull()
+    expect(store.failure(fingerprint)).not.toBeNull()
   })
 
   it('lists nothing from a Pi that runs no structured chat', async () => {
