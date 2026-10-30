@@ -307,13 +307,8 @@ export function entryWithConfiguredDefault(
   if (JSON.stringify(next) === JSON.stringify(configuredDefaultFacts(entry.configured))) {
     return null
   }
-  return agentModelCatalogEntry(
-    entry.agent,
-    entry.fingerprint,
-    entry.discovered,
-    entry.live,
-    next && { ...next, at }
-  )
+  const { agent, fingerprint, discovered, live } = entry
+  return agentModelCatalogEntry(agent, fingerprint, discovered, live, next && { ...next, at })
 }
 
 /** Exclude clocks so unchanged catalog facts do not trigger disk writes. */
