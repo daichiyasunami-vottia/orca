@@ -43,7 +43,7 @@ function catalog(request: PiRpcRequester['request'], now = Date.now) {
     provider: 'pi',
     accountHome: { variable: 'PI_CODING_AGENT_DIR', path: '/homes/pi' }
   })
-  const close = vi.fn(async () => undefined)
+  const close = vi.fn(async (): Promise<void> => undefined)
   const runListing = vi
     .spyOn(probeRunner, 'runAgentModelCatalogListing')
     .mockRejectedValue(new Error('unexpected text listing'))
