@@ -4,7 +4,10 @@ import {
   MIN_COMPATIBLE_RUNTIME_SERVER_VERSION,
   RUNTIME_PROTOCOL_VERSION
 } from '../../shared/protocol-version'
-import type { RuntimeOrchestrationEnvelope } from '../../shared/runtime-rpc-envelope'
+import type {
+  RuntimeRequestSelection,
+  RuntimeOrchestrationEnvelope
+} from '../../shared/runtime-rpc-envelope'
 import type { RuntimeStatus } from '../../shared/runtime-types'
 import { markEnvironmentUsed } from './environments'
 import { RuntimeClientError, RuntimeRpcFailureError, type RuntimeRpcResponse } from './types'
@@ -33,9 +36,9 @@ export class RemoteRuntimeCompatGate {
     params: unknown
     timeoutMs: number
     envelope?: RuntimeOrchestrationEnvelope
-    validateStatus?: (status: RuntimeStatus) => void
+    requestSelection?: RuntimeRequestSelection
   }): Promise<RuntimeRpcResponse<TResult>> {
-    if (!args.validateStatus && (this.checked || args.method === 'status.get')) {
+    if (!args.requestSelection && (this.checked || args.method === 'status.get')) {
       return args.transport.sendWebSocketRequest<TResult>(
         args.connection,
         args.method,
@@ -54,14 +57,14 @@ export class RemoteRuntimeCompatGate {
           throw new RuntimeRpcFailureError(response)
         }
         this.noteVerifiedStatus(response.result)
-        args.validateStatus?.(response.result)
         if (this.environmentSelector) {
           markEnvironmentUsed(this.userDataPath, this.environmentSelector, {
             runtimeId: response._meta.runtimeId
           })
         }
       },
-      args.envelope
+      args.envelope,
+      args.requestSelection
     )
   }
 

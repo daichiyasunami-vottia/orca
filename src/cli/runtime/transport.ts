@@ -7,7 +7,7 @@ import type {
 } from '../../shared/runtime-rpc-envelope'
 import { isKeepaliveFrame, RuntimeRpcEnvelopeSchema } from './envelope-schema'
 import { RuntimeClientError, RuntimeRpcFailureError, type RuntimeRpcResponse } from './types'
-import type { RuntimeStatus } from '../../shared/runtime-types'
+import type { RuntimeRequestSelection } from '../../shared/runtime-rpc-envelope'
 import { MAX_TIMER_DELAY_MS, isSafeTimerDelayMs } from '../../shared/timer-delay'
 import { runtimeAccessDeniedError } from './runtime-access-denied'
 
@@ -19,7 +19,7 @@ export async function sendRequest<TResult>(
   envelope?: RuntimeOrchestrationEnvelope,
   // Federation forwards envelopes; the runtime fence must stay local.
   expectedRuntimeSource?: ExpectedRuntimeSource,
-  validateStatus?: (status: RuntimeStatus) => void
+  requestSelection?: RuntimeRequestSelection
 ): Promise<RuntimeRpcResponse<TResult>> {
   if (!isSafeTimerDelayMs(timeoutMs)) {
     throw new RuntimeClientError(
@@ -42,8 +42,9 @@ export async function sendRequest<TResult>(
     let lineSegments: string[] = []
     let settled = false
     const requestId = randomUUID()
-    const statusRequestId = validateStatus ? randomUUID() : null
+    const statusRequestId = requestSelection ? randomUUID() : null
     let awaitingStatus = statusRequestId !== null
+    let selectedParams = params
 
     const timeout = setTimeout(() => {
       if (settled) {
@@ -185,14 +186,13 @@ export async function sendRequest<TResult>(
             if (frame.ok === false) {
               throw new RuntimeRpcFailureError(frame)
             }
-            // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: status.get supplies RuntimeStatus; validation checks the required capability before mutation.
-            validateStatus?.(frame.result as RuntimeStatus)
+            selectedParams = requestSelection?.paramsForStatus(frame.result)
           } catch (error) {
             finish({ ok: false, error: error instanceof Error ? error : new Error(String(error)) })
             return
           }
           awaitingStatus = false
-          send(requestId, method, params)
+          send(requestId, method, selectedParams)
           continue
         }
         finish({ ok: true, response })
@@ -200,8 +200,8 @@ export async function sendRequest<TResult>(
       }
     })
     const send = (id: string, requestedMethod: string, requestedParams: unknown): void => {
-      socket.write(
-        `${JSON.stringify({
+      try {
+        const serialized = `${JSON.stringify({
           id,
           authToken: metadata.authToken,
           method: requestedMethod,
@@ -213,7 +213,13 @@ export async function sendRequest<TResult>(
           orchestrationCompatibilityEvidence: envelope?.orchestrationCompatibilityEvidence,
           expectedRuntimeSource
         })}\n`
-      )
+        if (id === requestId) {
+          requestSelection?.onDispatch?.()
+        }
+        socket.write(serialized)
+      } catch (error) {
+        finish({ ok: false, error: error instanceof Error ? error : new Error(String(error)) })
+      }
     }
     socket.on('connect', () => {
       send(

@@ -146,7 +146,7 @@ export class RuntimeClient {
           params,
           timeoutMs: effectiveTimeoutMs,
           envelope,
-          validateStatus: options?.validateStatus
+          requestSelection: options?.requestSelection
         })
       } catch (error) {
         throw recover(error, null)
@@ -173,7 +173,7 @@ export class RuntimeClient {
         effectiveTimeoutMs,
         envelope,
         expectedRuntimeSource,
-        options?.validateStatus
+        options?.requestSelection
       )
     } catch (error) {
       throw recover(error, metadata.runtimeId ?? null)

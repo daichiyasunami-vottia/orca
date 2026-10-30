@@ -134,6 +134,128 @@ describe.skipIf(process.platform === 'win32')('runtime transport', () => {
     }
   )
 
+  it.each([
+    'capable',
+    'absent',
+    'empty',
+    'unrelated',
+    'malformed',
+    'error',
+    'close',
+    'after-send',
+    'prepare'
+  ] as const)('selects the local wire request without replay: %s', async (mode) => {
+    const root = mkdtempSync(join(tmpdir(), 'orca-selection-'))
+    roots.push(root)
+    const endpoint = join(root, 'runtime.sock')
+    const requests: { id: string; method: string; params?: unknown }[] = []
+    const server = createServer((socket) => {
+      sockets.add(socket)
+      socket.once('close', () => sockets.delete(socket))
+      socket.on('data', (data) => {
+        const request: { id: string; method: string; params?: unknown } = JSON.parse(
+          String(data).trim()
+        )
+        requests.push(request)
+        if (mode === 'close' || (mode === 'after-send' && request.method === 'worktree.rm')) {
+          socket.end()
+          return
+        }
+        socket.write(
+          `${JSON.stringify({
+            id: request.id,
+            ok: mode !== 'error',
+            ...(mode === 'error'
+              ? { error: { code: 'failed', message: 'status failed' } }
+              : {
+                  result:
+                    request.method === 'worktree.rm'
+                      ? { removed: true }
+                      : mode === 'capable'
+                        ? { capabilities: ['worktree.remove-branch-policy.v1'] }
+                        : mode === 'empty'
+                          ? { capabilities: [] }
+                          : mode === 'unrelated'
+                            ? { capabilities: ['future'] }
+                            : mode === 'malformed'
+                              ? { capabilities: 42 }
+                              : {}
+                }),
+            _meta: { runtimeId: 'selection' }
+          })}\n`
+        )
+      })
+    })
+    servers.add(server)
+    await new Promise<void>((resolve) => server.listen(endpoint, resolve))
+    writeFileSync(
+      getRuntimeMetadataPath(root),
+      JSON.stringify({
+        runtimeId: 'selection',
+        pid: process.pid,
+        transports: [{ kind: 'unix', endpoint }],
+        authToken: 'test',
+        startedAt: 1
+      })
+    )
+    const warning = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const selected = {
+      worktree: 'id:task',
+      hostId: 'local',
+      force: false,
+      runHooks: false,
+      allowFailedArchiveHook: false
+    }
+    try {
+      if (mode === 'prepare') {
+        const dispatched = vi.fn()
+        await expect(
+          sendRequest(
+            {
+              runtimeId: 'selection',
+              pid: process.pid,
+              transports: [{ kind: 'unix', endpoint }],
+              authToken: 'test',
+              startedAt: 1
+            },
+            'worktree.rm',
+            {},
+            5000,
+            undefined,
+            undefined,
+            { paramsForStatus: () => ({ value: 1n }), onDispatch: dispatched }
+          )
+        ).rejects.toThrow()
+        expect(dispatched).not.toHaveBeenCalled()
+      } else {
+        const promise = requestWorktreeRemoval(new RuntimeClient(root, 5000, null, null), {
+          ...selected,
+          deleteBranch: false
+        })
+        await (['capable', 'absent', 'empty', 'unrelated'].includes(mode)
+          ? expect(promise).resolves.toMatchObject({ result: { removed: true } })
+          : expect(promise).rejects.toBeInstanceOf(Error))
+      }
+      const sent = ['capable', 'absent', 'empty', 'unrelated', 'after-send'].includes(mode)
+      expect(requests.map((request) => request.method)).toEqual(
+        sent ? ['status.get', 'worktree.rm'] : ['status.get']
+      )
+      if (sent) {
+        expect(requests[1].params).toEqual({
+          ...selected,
+          allowUnverifiedPtyStop: false,
+          waitForBackgroundRemoval: true,
+          ...(mode === 'capable' ? { deleteBranch: false } : {})
+        })
+      }
+      expect(warning.mock.calls).toHaveLength(
+        ['absent', 'empty', 'unrelated', 'after-send'].includes(mode) ? 1 : 0
+      )
+    } finally {
+      warning.mockRestore()
+    }
+  })
+
   it('refreshes the per-call timeout when the runtime sends keepalive frames', async () => {
     const userDataPath = mkdtempSync(join(tmpdir(), 'orca-runtime-transport-'))
     roots.push(userDataPath)
