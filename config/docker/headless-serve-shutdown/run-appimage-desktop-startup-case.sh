@@ -8,21 +8,7 @@ if [[ $# -gt 1 ]]; then
   exit 64
 fi
 
-if ((EUID == 0)); then
-  if ! state_dir=$(mktemp -d /tmp/orca-appimage-startup.XXXXXX); then
-    echo 'FAIL: unable to create the AppImage startup state directory' >&2
-    exit 1
-  fi
-  if ! chown orca:orca "$state_dir"; then
-    echo "FAIL: unable to hand the AppImage startup state directory to orca: $state_dir" >&2
-    rm -rf -- "$state_dir" || true
-    exit 1
-  fi
-  exec runuser --user orca --preserve-environment -- env \
-    ORCA_STARTUP_STATE_DIR="$state_dir" \
-    ORCA_STARTUP_STATE_DIR_CLEANUP=1 \
-    "$0" "$@"
-fi
+((EUID == 0)) || { echo 'FAIL: PID namespace assertion requires container root' >&2; exit 1; }
 
 remove_state_dir_on_exit=${ORCA_STARTUP_STATE_DIR_CLEANUP:-0}
 if [[ -n "${ORCA_STARTUP_STATE_DIR:-}" ]]; then
@@ -281,11 +267,46 @@ bundled_cli=$(sed -n "s/^launcher='\([^']*\)'$/\1/p" "$shim")
 [[ "$bundled_cli" == */resources/bin/orca-ide && -x "$bundled_cli" ]]
 [[ "$bundled_cli" != "$XDG_CACHE_HOME/"* ]]
 runtime_root=$(dirname "$(dirname "$(dirname "$bundled_cli")")")
-runtime_pid=$(jq -er '.pid | select(. > 0)' "$profile/orca-runtime.json")
-runtime_id=$(jq -er '.runtimeId' "$profile/orca-runtime.json")
+# Window/updater readiness runs in parallel with RPC startup and metadata publication.
+runtime_ready=false
+deadline=$((SECONDS + 30))
+while ((SECONDS < deadline)); do
+  if ! identity_alive "$launcher_pid" "$launcher_start_ticks"; then
+    report_launcher_exit 'runtime transport readiness'
+  fi
+  if read -r runtime_pid runtime_id < <(jq -er '[.pid, .runtimeId] | @tsv' \
+      "$profile/orca-runtime.json" 2>/dev/null) &&
+    [[ "$runtime_pid" =~ ^[1-9][0-9]*$ && -n "$runtime_id" ]] &&
+    ORCA_USER_DATA_PATH="$profile" timeout --kill-after=1s 2s "$bundled_cli" status --json \
+      > "$state_dir/readiness-status.json" 2> "$state_dir/readiness-status.stderr" &&
+    jq -e --arg id "$runtime_id" \
+      '.ok == true and .result.runtime.reachable == true and .result.runtime.runtimeId == $id' \
+      "$state_dir/readiness-status.json" >/dev/null 2>&1; then
+    runtime_ready=true
+    break
+  fi
+  sleep 0.2
+done
+if [[ "$runtime_ready" != true ]]; then
+  echo 'FAIL: desktop runtime metadata/status did not become ready within 30s' >&2
+  cat "$state_dir/readiness-status.stderr" >&2 2>/dev/null || true
+  exit 1
+fi
+identity_alive "$launcher_pid" "$launcher_start_ticks"
 [[ $(readlink -f "/proc/$runtime_pid/exe") == "$runtime_root/orca-ide" ]]
 parent_pid_namespace=$(readlink /proc/self/ns/pid)
-ORCA_USER_DATA_PATH="$profile" timeout --kill-after=5s 30s unshare --user --map-root-user --pid --fork --kill-child --mount-proc \
+namespace_command=(unshare --pid --fork --kill-child --mount-proc)
+if ! timeout --kill-after=5s 10s "${namespace_command[@]}" true 2> "$state_dir/pidns-setup.stderr"; then
+  cat "$state_dir/pidns-setup.stderr" >&2
+  bwrap_path=$(command -v bwrap || true)
+  printf 'bwrap availability: %s\n' "${bwrap_path:-unavailable}" >&2
+  if [[ -z "$bwrap_path" ]] ||
+    ! grep -Eq '^unshare: .* (Operation not permitted|Permission denied)$' "$state_dir/pidns-setup.stderr"; then
+    exit 1
+  fi
+  namespace_command=("$bwrap_path" --unshare-pid --bind / / --proc /proc --die-with-parent --)
+fi
+ORCA_USER_DATA_PATH="$profile" timeout --kill-after=5s 30s "${namespace_command[@]}" \
   bash -euc '
     [[ $(readlink /proc/self/ns/pid) != "$4" ]]
     [[ ! -e "/proc/$1" ]]

@@ -192,16 +192,16 @@ function runDesktopStartupOracle({ image, appImage, platform }) {
     '256m',
     '--cap-drop',
     'ALL',
+    '--cap-add',
+    'SYS_ADMIN',
     // Only this oracle needs a nested PID namespace; the restricted CLI cases stay unchanged.
     '--security-opt',
     'seccomp=unconfined',
     '--security-opt',
     'apparmor=unconfined',
-    ...(fuseDevicePresent
-      ? ['--device', '/dev/fuse', '--cap-add', 'SYS_ADMIN']
-      : ['--security-opt', 'no-new-privileges']),
+    ...(fuseDevicePresent ? ['--device', '/dev/fuse'] : ['--security-opt', 'no-new-privileges']),
     '--user',
-    'orca',
+    '0',
     '--entrypoint',
     '/usr/local/bin/run-appimage-desktop-startup-case',
     '-e',
@@ -217,7 +217,7 @@ function runDesktopStartupOracle({ image, appImage, platform }) {
   process.stdout.write(result.stdout)
   process.stderr.write(result.stderr)
   const output = result.stdout + result.stderr
-  // Device access alone does not prove that the nonroot fixture may mount the AppImage.
+  // Device access alone does not prove that this fixture may mount the AppImage.
   if (
     result.status === 127 &&
     result.stdout.includes('AppImage desktop launch mode: fuse\n') &&

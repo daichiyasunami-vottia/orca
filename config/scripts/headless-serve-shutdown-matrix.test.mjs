@@ -50,6 +50,8 @@ describe('packaged shutdown matrix', () => {
       args.some((arg) => arg.includes('120s /input/orca.AppImage --appimage-extract'))
     )
     expect(startup).toHaveLength(1)
+    expect(startup[0][startup[0].indexOf('--user') + 1]).toBe('0')
+    expect(startup[0][startup[0].indexOf('--cap-add') + 1]).toBe('SYS_ADMIN')
     expect(extraction).toHaveLength(1)
     expect(commands().indexOf(startup[0])).toBeLessThan(commands().indexOf(extraction[0]))
     expect(signalRuns()).toHaveLength(6)
