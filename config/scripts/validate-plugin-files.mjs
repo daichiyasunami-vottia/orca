@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
-import { loadPluginSchemaModule } from './plugin-schema-module-loader.mjs'
+import { loadPluginSchemaModule, REPO_ROOT } from './plugin-schema-module-loader.mjs'
 
 const { validatePluginFile } = loadPluginSchemaModule('installation/plugin-file-validation.ts')
 const { parsePluginManifest } = loadPluginSchemaModule('manifest/plugin-manifest.ts')
@@ -34,6 +34,22 @@ const ARTIFACT_PARSERS = {
 const { parsePluginLanguagePackArtifact } = loadPluginSchemaModule(
   'artifacts/plugin-language-pack-artifact.ts'
 )
+const { englishSourceLookup } = loadPluginSchemaModule(
+  'languages/plugin-translation-string-policy.ts'
+)
+let englishSource = null
+// Why Orca's English: pack strings are capped relative to the text they translate.
+function englishLookup() {
+  englishSource ??= englishSourceLookup(
+    JSON.parse(
+      readFileSync(
+        path.join(REPO_ROOT, 'src', 'renderer', 'src', 'i18n', 'locales', 'en.json'),
+        'utf8'
+      )
+    )
+  )
+  return englishSource
+}
 
 // Why strict here: Orca skips unknown theme tokens and icon slots at runtime, so authors only
 // learn about a typo from this check.
@@ -60,7 +76,7 @@ function languagePackErrors(pluginDir, manifest) {
   return manifest.contributes.languagePacks.flatMap((pack) => {
     const file = path.join(pluginDir, ...pack.path.split('/'))
     const parsed = existsSync(file)
-      ? parsePluginLanguagePackArtifact(readFileSync(file, 'utf8'), 'strict')
+      ? parsePluginLanguagePackArtifact(readFileSync(file, 'utf8'), 'strict', englishLookup())
       : { ok: false, error: 'file not found' }
     return parsed.ok
       ? []
