@@ -16,7 +16,7 @@ import {
 import type { ProjectHostSetup } from '../../../shared/project-types'
 import type { Repo } from '../../../shared/repo-types'
 import { translate } from '@/i18n/i18n'
-import { dedupeReadySetupRows } from './project-host-setup-row-dedupe'
+import { dedupeReadySetupRows, keepFirstSetupPerCheckout } from './project-host-setup-row-dedupe'
 
 export type ProjectHostSetupSelection = { id: string; hostId: ExecutionHostId }
 
@@ -131,28 +131,27 @@ function buildReadySetupOptions({
 }: BuildReadySetupOptionsInput): ReadyProjectHostSetupOption[] {
   const eligibleRepoIds = new Set(eligibleRepos.map((repo) => repo.id))
   const hostById = new Map(hosts.map((host) => [host.id, host]))
-  const options = projectHostSetups
-    .filter((setup) => {
-      const host = hostById.get(setup.hostId)
-      return (
-        setup.projectId === projectId &&
-        setup.setupState === 'ready' &&
-        eligibleRepoIds.has(setup.repoId) &&
-        Boolean(host) &&
-        !isEphemeralVmProjectHost(host) &&
-        !isRuntimeOwnedSshSetupHost(setup.hostId)
-      )
-    })
-    .map((setup) => ({
-      id: setup.id,
-      kind: 'ready' as const,
-      projectId: setup.projectId,
-      hostId: setup.hostId,
-      repoId: setup.repoId,
-      label: hostById.get(setup.hostId)?.label || getExecutionHostLabel(setup.hostId),
-      detail: setup.displayName,
-      path: setup.path
-    }))
+  const readySetups = projectHostSetups.filter((setup) => {
+    const host = hostById.get(setup.hostId)
+    return (
+      setup.projectId === projectId &&
+      setup.setupState === 'ready' &&
+      eligibleRepoIds.has(setup.repoId) &&
+      Boolean(host) &&
+      !isEphemeralVmProjectHost(host) &&
+      !isRuntimeOwnedSshSetupHost(setup.hostId)
+    )
+  })
+  const options = keepFirstSetupPerCheckout(readySetups).map((setup) => ({
+    id: setup.id,
+    kind: 'ready' as const,
+    projectId: setup.projectId,
+    hostId: setup.hostId,
+    repoId: setup.repoId,
+    label: hostById.get(setup.hostId)?.label || getExecutionHostLabel(setup.hostId),
+    detail: setup.displayName,
+    path: setup.path
+  }))
   return dedupeReadySetupRows(options, hostById)
 }
 

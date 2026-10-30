@@ -135,6 +135,12 @@ export function buildProjectGroupingIndex(
   return index
 }
 
+/** One key per independent checkout; provisioned and folder copies on a surface share one. */
+export function getProjectSetupCheckoutKey(setup: ProjectSectionSetup): string {
+  const checkout = isDistinctUserCheckout(setup) ? getCheckoutIdentity(setup) : ''
+  return `${getProjectSetupSurfaceKey(setup)}::${checkout}`
+}
+
 // Why: Settings splits projects by this same rule so it matches the sidebar headers.
 export function isCheckoutScopedProjectSetup(
   setup: ProjectSectionSetup,

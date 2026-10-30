@@ -228,6 +228,28 @@ describe('project-host workspace target resolution', () => {
     })
   })
 
+  it('keeps an explicit imported clone instead of the first setup on its host', () => {
+    const imported = { setupMethod: 'imported-existing-folder' as const }
+    const repos = [makeRepo('orca-main'), makeRepo('orca-release')]
+    const projects = [makeProject('github:stablyai/orca', ['orca-main', 'orca-release'])]
+    const projectHostSetups = [
+      makeSetup('orca-main', 'github:stablyai/orca', 'local', 'orca-main', imported),
+      makeSetup('orca-release', 'github:stablyai/orca', 'local', 'orca-release', imported)
+    ]
+
+    const resolution = resolveWorkspaceCreationTarget({
+      eligibleRepos: repos,
+      projects,
+      projectHostSetups,
+      projectHostSetupId: 'orca-release'
+    })
+
+    expect(resolution).toMatchObject({
+      status: 'ready',
+      target: { projectHostSetupId: 'orca-release', repoId: 'orca-release', hostId: 'local' }
+    })
+  })
+
   it('keeps an explicit setup id that is the only one on its host', () => {
     const repos = [makeRepo('orca-local'), makeRepo('orca-ssh', { connectionId: 'builder' })]
     const projects = [makeProject('github:stablyai/orca', ['orca-local', 'orca-ssh'])]

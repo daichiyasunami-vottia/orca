@@ -1,28 +1,42 @@
 import type { ExecutionHostId } from '../../../shared/execution-host'
 import type { ExecutionHostRegistryEntry } from '../../../shared/execution-host-registry'
+import {
+  getProjectSetupCheckoutKey,
+  type ProjectSectionSetup
+} from '../../../shared/project-section-grouping'
 import type {
   ProjectHostSetupSelection,
   ReadyProjectHostSetupOption
 } from './project-host-setup-options'
 
-/** Collapses ready setup rows to one per host, then one per checkout on a merged machine. */
+/** Legacy rows (e.g. linked worktrees added as projects) collapse per host; imported or cloned checkouts stay apart like their sidebar headers. */
+export function getSetupPickerCheckoutKey(setup: ProjectSectionSetup): string {
+  return setup.setupMethod === 'legacy-repo'
+    ? JSON.stringify([setup.projectId, setup.hostId])
+    : getProjectSetupCheckoutKey(setup)
+}
+
+/** Keeps the first ready setup per picker checkout, the same one creation canonicalizes to. */
+export function keepFirstSetupPerCheckout<T extends ProjectSectionSetup>(
+  setups: readonly T[]
+): T[] {
+  const seenCheckouts = new Set<string>()
+  return setups.filter((setup) => {
+    const key = getSetupPickerCheckoutKey(setup)
+    if (seenCheckouts.has(key)) {
+      return false
+    }
+    seenCheckouts.add(key)
+    return true
+  })
+}
+
+/** Collapses ready setup rows to one per checkout on a merged machine. */
 export function dedupeReadySetupRows(
   options: readonly ReadyProjectHostSetupOption[],
   hostById: ReadonlyMap<ExecutionHostId, ExecutionHostRegistryEntry>
 ): ReadyProjectHostSetupOption[] {
-  return collapseMergedHostCheckouts(options.filter(dedupeByHost()), hostById)
-}
-
-// Creation uses the first project+host setup, so display that same row; legacy duplicates (e.g. linked worktree projects) are otherwise identical and unreachable.
-function dedupeByHost(): (option: ReadyProjectHostSetupOption) => boolean {
-  const seenHosts = new Set<ExecutionHostId>()
-  return (option) => {
-    if (seenHosts.has(option.hostId)) {
-      return false
-    }
-    seenHosts.add(option.hostId)
-    return true
-  }
+  return collapseMergedHostCheckouts(options, hostById)
 }
 
 // SSH and managed server may report the same machine/checkout; keep the picker’s current route. Distinct paths remain separate checkouts.

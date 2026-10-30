@@ -11,6 +11,7 @@ import {
 import type { Project, ProjectHostSetup } from '../../../shared/project-types'
 import type { Repo } from '../../../shared/repo-types'
 import { resolveComposerRepoId } from './new-workspace-composer-repo'
+import { getSetupPickerCheckoutKey } from './project-host-setup-row-dedupe'
 import { findSoleHostCopy } from '../../../shared/worktree/host-qualified-identity'
 
 export type WorkspaceCreationTarget = {
@@ -183,12 +184,13 @@ export function resolveWorkspaceCreationTarget(
     if (!isReadySetup(setup)) {
       return { status: 'unavailable', reason: 'setup-not-ready' }
     }
-    // Canonicalize legacy same-host duplicate drafts to the picker’s first setup so displayed and created paths match.
+    // Canonicalize legacy duplicates of one checkout to the picker’s first setup so displayed and created paths match.
+    const checkoutKey = getSetupPickerCheckoutKey(setup)
     const canonical =
       findReadySetupTarget(
         setups,
         reposById,
-        (entry) => entry.projectId === setup.projectId && entry.hostId === setup.hostId
+        (entry) => getSetupPickerCheckoutKey(entry) === checkoutKey
       ) ?? createTarget(setup, reposById)
     if (canonical) {
       return { status: 'ready', target: canonical }

@@ -239,6 +239,25 @@ describe('buildProjectHostSetupOptions', () => {
     ])
   })
 
+  it('lists each imported clone of a project on one host', () => {
+    // One clone per release line shows as separate sidebar headers, so each must be a creation target too.
+    const imported = { setupMethod: 'imported-existing-folder' as const }
+    const options = buildProjectHostSetupOptions({
+      projectId: 'project-1',
+      eligibleRepos: [repo('app'), repo('app-v1.7')],
+      hosts: [host('local')],
+      projectHostSetups: [
+        setup('app', 'project-1', 'local', 'app', imported),
+        setup('app-v1.7', 'project-1', 'local', 'app-v1.7', imported)
+      ]
+    })
+
+    expect(options).toEqual([
+      expect.objectContaining({ id: 'app', repoId: 'app', path: '/repos/app' }),
+      expect.objectContaining({ id: 'app-v1.7', repoId: 'app-v1.7', path: '/repos/app-v1.7' })
+    ])
+  })
+
   it('keeps one ready choice per host when a project is set up on several hosts', () => {
     const options = buildProjectHostSetupOptions({
       projectId: 'project-1',
