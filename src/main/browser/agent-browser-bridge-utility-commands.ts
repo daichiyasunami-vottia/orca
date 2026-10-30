@@ -117,7 +117,14 @@ export abstract class AgentBrowserBridgeUtilityCommands extends AgentBrowserBrid
       await mkdir(path.dirname(savePath), { recursive: true })
       const claim = this.browserManager.claimNextDownload(target.webContentsId, savePath)
       try {
-        await this.execAgentBrowser(sessionName, ['click', selector])
+        await this.execAgentBrowser(sessionName, ['click', selector], {
+          // execFile treats 0 as no timeout.
+          timeoutMs: Math.max(1, replyDeadline - Date.now()),
+          timeoutError: new BrowserError(
+            'browser_timeout',
+            `Clicking ${selector} did not finish within ${AGENT_DOWNLOAD_REPLY_DEADLINE_MS / 1000}s.`
+          )
+        })
         if (!(await withTimeout(claim.started, AGENT_DOWNLOAD_START_TIMEOUT_MS, false))) {
           throw new BrowserError(
             'browser_download_not_started',
