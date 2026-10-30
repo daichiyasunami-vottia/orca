@@ -263,10 +263,14 @@ export abstract class AgentBrowserBridgeStateCommands extends AgentBrowserBridge
   }
 
   async exec(command: string, worktreeId?: string, browserPageId?: string): Promise<unknown> {
-    return this.enqueueTargetedCommand(worktreeId, browserPageId, async (sessionName) => {
-      // Passthrough arguments must not override Orca's selected page or CDP proxy.
-      const args = stripAgentBrowserTargetArgs(parseShellArgs(command.trim()))
-      return await this.execAgentBrowser(sessionName, args, { cliArgv: true })
-    })
+    // Passthrough arguments must not override Orca's selected page or CDP proxy.
+    const args = stripAgentBrowserTargetArgs(parseShellArgs(command.trim()))
+    return this.enqueueTargetedCommand(
+      worktreeId,
+      browserPageId,
+      async (sessionName) => await this.execAgentBrowser(sessionName, args, { cliArgv: true }),
+      // Passthrough text can be a bare `e2`; only the explicit ref forms are certainly refs.
+      { elements: args.filter((arg) => arg.startsWith('@') || arg.startsWith('ref=')) }
+    )
   }
 }
